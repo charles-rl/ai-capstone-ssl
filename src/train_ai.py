@@ -13,7 +13,7 @@ from training_models import SimCLR
 EPOCHS = 200
 BATCH_SIZE = 512  # Try 512 if your GPU allows, otherwise 256 or 128
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CHKPT_PATH = "../models/best_simclr_model.pth"
+CHKPT_PATH = "./models/best_simclr_model_ablation.pth"
 
 CONFIG = {
     "learning_rate": 3e-4,
@@ -102,26 +102,26 @@ def knn_monitor(model, memory_loader, test_loader, device, k=20):
     return (correct / total) * 100.0
 
 # --- TRAINING LOOP ---
-def train():
-    wandb.init(project="NYCU-AI-Capstone-Project2", config=CONFIG, name="SimCLR-Phase1")
+def train(config_override):
+    wandb.init(project="NYCU-AI-Capstone-Project2", config=config_override, name=f"SimCLR-temp{config_override['temperature']}-batch{config_override['batch_size']}")
     os.makedirs(os.path.dirname(CHKPT_PATH), exist_ok=True)
     print(f"Device: {DEVICE}")
 
     # 1. Prepare Datasets (We need 3 loaders!)
     # Loader A: SimCLR Training (returns twin images, no labels)
     train_dataset = CIFAR10(root='./dataset', train=True, download=True, transform=simclr_transform)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, drop_last=True)
+    train_loader = DataLoader(train_dataset, batch_size=config_override['batch_size'], shuffle=True, num_workers=4, drop_last=True)
     
     # Loader B: kNN Memory (Train set, but no twins, no crazy augmentations, returns labels)
     memory_dataset = CIFAR10(root='./dataset', train=True, download=True, transform=test_transforms)
-    memory_loader = DataLoader(memory_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    memory_loader = DataLoader(memory_dataset, batch_size=config_override['batch_size'], shuffle=False, num_workers=4)
 
     # Loader C: kNN Test (Test set, returns labels)
     test_dataset = CIFAR10(root='./dataset', train=False, download=True, transform=test_transforms)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=config_override['batch_size'], shuffle=False, num_workers=4)
     
     # 2. Initialize Model
-    model = SimCLR(config=CONFIG, chkpt_file_pth=CHKPT_PATH, device=DEVICE)
+    model = SimCLR(config=config_override, chkpt_file_pth=CHKPT_PATH, device=DEVICE)
     
     best_knn_acc = 0.0
 
@@ -140,13 +140,13 @@ def train():
         log_dict = {
             "epoch": epoch + 1,
             "train_nt_xent_loss": avg_train_loss,
-            "learning_rate": CONFIG["learning_rate"]
+            "learning_rate": config_override["learning_rate"]
         }
 
         # -- KNN MONITOR (Every 5 Epochs per PDF) --
         # We also do it on epoch 0 just to see the baseline random accuracy (~10%)
         if epoch == 0 or (epoch + 1) % 5 == 0:
-            knn_acc = knn_monitor(model, memory_loader, test_loader, DEVICE, k=CONFIG["knn_k"])
+            knn_acc = knn_monitor(model, memory_loader, test_loader, DEVICE, k=config_override["knn_k"])
             log_dict["knn_accuracy"] = knn_acc
             print(f"Epoch {epoch+1:03d} | Loss: {avg_train_loss:.4f} | kNN Acc: {knn_acc:.2f}%")
             
@@ -164,4 +164,22 @@ def train():
     wandb.finish()
 
 if __name__ == "__main__":
-    train()
+    ablation_tasks = [
+        # --- Temperature Ablations ---
+        {"temperature": 0.1, "batch_size": 512},
+        {"temperature": 5.0, "batch_size": 512},
+
+        # --- Batch Size Ablations ---
+        # {"temperature": 0.5, "batch_size": 256},
+        # {"temperature": 0.5, "batch_size": 128},
+        # {"temperature": 0.5, "batch_size": 64},
+        # {"temperature": 0.5, "batch_size": 32},
+
+        # --- Augmentation Ablation ---
+        # {"temperature": 0.5, "batch_size": 512, "aug_mode": "crop_only"},
+    ]
+    for config in ablation_tasks:
+        config_ = CONFIG.copy()
+        config_["temperature"] = config["temperature"]
+        config_["batch_size"] = config["batch_size"]
+        train(config_)

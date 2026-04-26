@@ -14,7 +14,7 @@ BATCH_SIZE = 512
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # SSL checkpoint used in linear probe mode
-SIMCLR_CHKPT_PATH = "../models/best_simclr_model.pth"
+SIMCLR_CHKPT_PATH = "./models/best_simclr_model.pth"
 
 CONFIG = {
 	"learning_rate": 1e-3,
