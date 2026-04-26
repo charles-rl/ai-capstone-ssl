@@ -167,5 +167,88 @@ class SimCLR(nn.Module):
         self.load_state_dict(checkpoint["model"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
 
+
+class ResNetClassifier(nn.Module):
+    def __init__(self, config: dict, simclr_chkpt_path: str, device):
+        super(ResNetClassifier, self).__init__()
+        self.device = device
+        
+        # Hyperparameters (PDF says lr=1e-3 for probing)
+        lr = float(config.get("learning_rate", 1e-3))
+        weight_decay = float(config.get("weight_decay", 1e-6))
+        self.mode = config.get("mode", "linear_probe") # "linear_probe", "supervised", or "random_init"
+        
+        # ==========================================
+        # 1. BASE ENCODER (Identical to SimCLR)
+        # ==========================================
+        self.backbone = resnet18(weights=None)
+        self.backbone.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.backbone.maxpool = nn.Identity()
+        self.backbone.fc = nn.Identity()
+
+        # ==========================================
+        # 2. CLASSIFICATION HEAD
+        # ==========================================
+        # 512 out of backbone -> 10 classes (CIFAR-10)
+        self.head = nn.Linear(512, 10)
+
+        # ==========================================
+        # 3. MODE LOGIC (Load & Freeze)
+        # ==========================================
+        if self.mode == "linear_probe":
+            print(f"--> [Linear Probe] Loading SSL weights and freezing backbone...")
+            # Load the pre-trained SimCLR backbone
+            checkpoint = torch.load(simclr_chkpt_path, map_location=self.device)
+            # Remove projector weights, keep only backbone weights
+            backbone_weights = {k.replace('backbone.', ''): v 
+                                for k, v in checkpoint["model"].items() 
+                                if k.startswith('backbone.')}
+            self.backbone.load_state_dict(backbone_weights)
+            
+            # Freeze the backbone
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+                
+        elif self.mode == "random_init":
+            print(f"--> [Random Init] Freezing random backbone...")
+            # Do NOT load weights, but DO freeze the backbone
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+                
+        elif self.mode == "supervised":
+            print(f"--> [Supervised] Training entire network from scratch...")
+            # Do NOT load weights, do NOT freeze anything
+            pass 
+
+        self.to(self.device)
+
+        # ==========================================
+        # 4. OPTIMIZER
+        # ==========================================
+        # Important: Only pass parameters that require gradients to the optimizer!
+        trainable_params = filter(lambda p: p.requires_grad, self.parameters())
+        self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+
+    def forward(self, x):
+        h = self.backbone(x)
+        logits = self.head(h)
+        return logits
+
+    def learn(self, x, y):
+        x, y = x.to(self.device), y.to(self.device)
+        
+        logits = self.forward(x)
+        loss = F.cross_entropy(logits, y)
+        
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        # Calculate accuracy for monitoring
+        predictions = torch.argmax(logits, dim=1)
+        acc = (predictions == y).float().mean().item()
+        
+        return loss.item(), acc
+
 if __name__ == "__main__":
     get_resnet_backbone()
