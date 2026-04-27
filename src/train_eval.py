@@ -2,7 +2,7 @@ import torch
 import torchvision.transforms as T
 import wandb
 from torch.utils.data import DataLoader
-from torchvision.datasets import CIFAR10
+from torchvision.datasets import CIFAR10, CIFAR100
 from tqdm import tqdm
 
 from training_models import ResNetClassifier
@@ -80,9 +80,12 @@ def train():
 	wandb.init(project="NYCU-AI-Capstone-Project2", config=CONFIG, name=run_name)
 	print(f"Device: {DEVICE}")
 
-	train_dataset = CIFAR10(
+	train_dataset = CIFAR100(
 		root="./dataset", train=True, download=True, transform=train_transforms
 	)
+    # train_dataset = CIFAR10(
+	# 	root="./dataset", train=True, download=True, transform=train_transforms
+	# )
 	train_loader = DataLoader(
 		train_dataset,
 		batch_size=BATCH_SIZE,
@@ -91,9 +94,12 @@ def train():
 		drop_last=True,
 	)
 
-	test_dataset = CIFAR10(
+	test_dataset = CIFAR100(
 		root="./dataset", train=False, download=True, transform=test_transforms
 	)
+    # test_dataset = CIFAR10(
+	# 	root="./dataset", train=False, download=True, transform=test_transforms
+	# )
 	test_loader = DataLoader(
 		test_dataset,
 		batch_size=BATCH_SIZE,

@@ -190,7 +190,9 @@ class ResNetClassifier(nn.Module):
         # 2. CLASSIFICATION HEAD
         # ==========================================
         # 512 out of backbone -> 10 classes (CIFAR-10)
-        self.head = nn.Linear(512, 10)
+        # self.head = nn.Linear(512, 10)
+        # 512 out of backbone -> 100 classes (CIFAR-100)
+        self.head = nn.Linear(512, 100)
 
         # ==========================================
         # 3. MODE LOGIC (Load & Freeze)
