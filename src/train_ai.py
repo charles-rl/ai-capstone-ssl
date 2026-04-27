@@ -38,15 +38,6 @@ cifar10_std = (0.2023, 0.1994, 0.2010)
 # Training Transforms (Two Twins)
 s = 0.5
 color_jitter = T.ColorJitter(0.8 * s, 0.8 * s, 0.8 * s, 0.2 * s)
-train_transforms = T.Compose([
-    T.RandomResizedCrop(size=32),
-    T.RandomHorizontalFlip(p=0.5),
-    T.RandomApply([color_jitter], p=0.8),
-    T.RandomGrayscale(p=0.2),
-    T.ToTensor(),
-    T.Normalize(cifar10_mean, cifar10_std)
-])
-simclr_transform = SimCLRTransform(train_transforms)
 
 # kNN Testing Transforms (No random crops/colors, just standard normalization)
 test_transforms = T.Compose([
@@ -103,7 +94,38 @@ def knn_monitor(model, memory_loader, test_loader, device, k=20):
 
 # --- TRAINING LOOP ---
 def train(config_override):
-    wandb.init(project="NYCU-AI-Capstone-Project2", config=config_override, name=f"SimCLR-temp{config_override['temperature']}-batch{config_override['batch_size']}")
+    aug_mode = config_override.get("aug_mode")
+
+    if aug_mode == "crop_only":
+        train_transforms = T.Compose([
+            T.RandomResizedCrop(size=32),
+            T.ToTensor(),
+            T.Normalize(cifar10_mean, cifar10_std)
+        ])
+    elif aug_mode == "color_only":
+        train_transforms = T.Compose([
+            T.Resize(32),
+            T.ColorJitter(0.4, 0.4, 0.4, 0.1),
+            T.ToTensor(),
+            T.Normalize(cifar10_mean, cifar10_std)
+        ])
+    else:
+        train_transforms = T.Compose([
+            T.RandomResizedCrop(size=32),
+            T.RandomHorizontalFlip(p=0.5),
+            T.RandomApply([color_jitter], p=0.8),
+            T.RandomGrayscale(p=0.2),
+            T.ToTensor(),
+            T.Normalize(cifar10_mean, cifar10_std)
+        ])
+
+    simclr_transform = SimCLRTransform(train_transforms)
+
+    run_name = f"SimCLR-temp{config_override['temperature']}-batch{config_override['batch_size']}-aug{aug_mode if aug_mode else 'full'}"
+    if aug_mode:
+        run_name += f"-aug{aug_mode}"
+
+    wandb.init(project="NYCU-AI-Capstone-Project2", config=config_override, name=run_name)
     os.makedirs(os.path.dirname(CHKPT_PATH), exist_ok=True)
     print(f"Device: {DEVICE}")
 
@@ -166,8 +188,8 @@ def train(config_override):
 if __name__ == "__main__":
     ablation_tasks = [
         # --- Temperature Ablations ---
-        {"temperature": 0.1, "batch_size": 512},
-        {"temperature": 5.0, "batch_size": 512},
+        # {"temperature": 0.1, "batch_size": 512},
+        # {"temperature": 5.0, "batch_size": 512},
 
         # --- Batch Size Ablations ---
         # {"temperature": 0.5, "batch_size": 256},
@@ -176,10 +198,13 @@ if __name__ == "__main__":
         # {"temperature": 0.5, "batch_size": 32},
 
         # --- Augmentation Ablation ---
-        # {"temperature": 0.5, "batch_size": 512, "aug_mode": "crop_only"},
+        {"temperature": 0.5, "batch_size": 512, "aug_mode": "crop_only"},
+        {"temperature": 0.5, "batch_size": 512, "aug_mode": "color_only"},
     ]
     for config in ablation_tasks:
         config_ = CONFIG.copy()
         config_["temperature"] = config["temperature"]
         config_["batch_size"] = config["batch_size"]
+        if "aug_mode" in config:
+            config_["aug_mode"] = config["aug_mode"]
         train(config_)
