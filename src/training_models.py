@@ -74,6 +74,7 @@ class SimCLR(nn.Module):
             nn.ReLU(),
             nn.Linear(512, 128)
         )
+        self.projector = nn.Identity() if config.get("no_projector", False) else self.projector
         
         # Optimizer integrated RL-style
         self.optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
@@ -176,10 +177,12 @@ class ResNetClassifier(nn.Module):
         # Hyperparameters (PDF says lr=1e-3 for probing)
         lr = float(config.get("learning_rate", 1e-3))
         weight_decay = float(config.get("weight_decay", 1e-6))
-        self.mode = config.get("mode", "linear_probe") # "linear_probe", "supervised", or "random_init"
+        
+        # Modes: "linear_probe", "supervised", "random_init", OR "linear_probe_projector"
+        self.mode = config.get("mode", "linear_probe") 
         
         # ==========================================
-        # 1. BASE ENCODER (Identical to SimCLR)
+        # 1. BASE ENCODER
         # ==========================================
         self.backbone = resnet18(weights=None)
         self.backbone.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -187,53 +190,88 @@ class ResNetClassifier(nn.Module):
         self.backbone.fc = nn.Identity()
 
         # ==========================================
-        # 2. CLASSIFICATION HEAD
+        # 2. PROJECTOR HEAD (Only used for the ablation)
         # ==========================================
-        # 512 out of backbone -> 10 classes (CIFAR-10)
-        # self.head = nn.Linear(512, 10)
-        # 512 out of backbone -> 100 classes (CIFAR-100)
-        self.head = nn.Linear(512, 100)
+        self.projector = nn.Sequential(
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 128)
+        )
 
         # ==========================================
-        # 3. MODE LOGIC (Load & Freeze)
+        # 3. CLASSIFICATION HEAD
+        # ==========================================
+        # If we use the projector representation, the input dimension is 128. Otherwise, 512.
+        ###### Comment and uncomment if using CIFAR-100 instead of CIFAR-10 ######
+        if self.mode == "linear_probe_projector":
+            self.head = nn.Linear(128, 10) # 128 -> CIFAR-10
+            # self.head = nn.Linear(128, 100) # 128 -> CIFAR-100
+        else:
+            self.head = nn.Linear(512, 10) # 512 -> CIFAR-10
+            # self.head = nn.Linear(128, 100) # 128 -> CIFAR-100
+
+        # ==========================================
+        # 4. MODE LOGIC (Load & Freeze)
         # ==========================================
         if self.mode == "linear_probe":
             print(f"--> [Linear Probe] Loading SSL weights and freezing backbone...")
-            # Load the pre-trained SimCLR backbone
             checkpoint = torch.load(simclr_chkpt_path, map_location=self.device)
-            # Remove projector weights, keep only backbone weights
             backbone_weights = {k.replace('backbone.', ''): v 
-                                for k, v in checkpoint["model"].items() 
-                                if k.startswith('backbone.')}
+                                for k, v in checkpoint["model"].items() if k.startswith('backbone.')}
             self.backbone.load_state_dict(backbone_weights)
             
             # Freeze the backbone
             for param in self.backbone.parameters():
                 param.requires_grad = False
                 
+        elif self.mode == "linear_probe_projector":
+            print(f"--> [Projector Ablation] Loading SSL backbone + projector and freezing both...")
+            checkpoint = torch.load(simclr_chkpt_path, map_location=self.device)
+            
+            # Load backbone
+            backbone_weights = {k.replace('backbone.', ''): v 
+                                for k, v in checkpoint["model"].items() if k.startswith('backbone.')}
+            self.backbone.load_state_dict(backbone_weights)
+            
+            # Load projector
+            projector_weights = {k.replace('projector.', ''): v 
+                                 for k, v in checkpoint["model"].items() if k.startswith('projector.')}
+            self.projector.load_state_dict(projector_weights)
+            
+            # Freeze both backbone AND projector
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+            for param in self.projector.parameters():
+                param.requires_grad = False
+
         elif self.mode == "random_init":
             print(f"--> [Random Init] Freezing random backbone...")
-            # Do NOT load weights, but DO freeze the backbone
             for param in self.backbone.parameters():
                 param.requires_grad = False
                 
         elif self.mode == "supervised":
-            print(f"--> [Supervised] Training entire network from scratch...")
-            # Do NOT load weights, do NOT freeze anything
+            print(f"-->[Supervised] Training entire network from scratch...")
             pass 
 
         self.to(self.device)
 
         # ==========================================
-        # 4. OPTIMIZER
+        # 5. OPTIMIZER
         # ==========================================
-        # Important: Only pass parameters that require gradients to the optimizer!
         trainable_params = filter(lambda p: p.requires_grad, self.parameters())
         self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
 
     def forward(self, x):
         h = self.backbone(x)
-        logits = self.head(h)
+        
+        # If testing the projector ablation, pass 'h' through the projector to get 'z' (128 dims)
+        if self.mode == "linear_probe_projector":
+            z = self.projector(h)
+            logits = self.head(z)
+        else:
+            # Standard probing/supervised uses 'h' (512 dims) directly
+            logits = self.head(h)
+            
         return logits
 
     def learn(self, x, y):
@@ -246,7 +284,6 @@ class ResNetClassifier(nn.Module):
         loss.backward()
         self.optimizer.step()
         
-        # Calculate accuracy for monitoring
         predictions = torch.argmax(logits, dim=1)
         acc = (predictions == y).float().mean().item()
         

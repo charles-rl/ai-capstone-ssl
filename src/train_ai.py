@@ -1,7 +1,6 @@
 import os
 import torch
 import torch.nn.functional as F
-import numpy as np
 import wandb
 from torch.utils.data import DataLoader
 from torchvision.datasets import CIFAR10
@@ -198,13 +197,17 @@ if __name__ == "__main__":
         # {"temperature": 0.5, "batch_size": 32},
 
         # --- Augmentation Ablation ---
-        {"temperature": 0.5, "batch_size": 512, "aug_mode": "crop_only"},
-        {"temperature": 0.5, "batch_size": 512, "aug_mode": "color_only"},
+        # {"temperature": 0.5, "batch_size": 512, "aug_mode": "crop_only"},
+        # {"temperature": 0.5, "batch_size": 512, "aug_mode": "color_only"},
+        
+        # --- Projector Ablation ---
+        {"temperature": 0.5, "batch_size": 512, "no_projector": True}
     ]
     for config in ablation_tasks:
         config_ = CONFIG.copy()
         config_["temperature"] = config["temperature"]
         config_["batch_size"] = config["batch_size"]
+        config_["no_projector"] = config.get("no_projector", False)
         if "aug_mode" in config:
             config_["aug_mode"] = config["aug_mode"]
         train(config_)
